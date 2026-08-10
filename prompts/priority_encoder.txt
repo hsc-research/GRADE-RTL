@@ -1,0 +1,13 @@
+Generate synthesizable Verilog-2001 for a module named priority_encoder.
+Interface:
+  input  [3:0] request
+  output [1:0] encoded
+  output       valid
+Behavior:
+  request[3] has the highest priority and request[0] has the lowest.
+  encoded reports the index of the highest asserted request bit.
+  valid is 1 when any request bit is asserted; otherwise encoded is 0 and valid is 0.
+Constraints:
+  Use an ANSI-style module header and complete combinational logic.
+  Do not use implicit nets or placeholders.
+  Output only complete Verilog RTL.

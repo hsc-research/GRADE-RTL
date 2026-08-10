@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "release_type": "framework-and-aggregate-results",
+  "framework_version": "1.0.0",
+  "included": {
+    "source_code": true,
+    "unit_tests": true,
+    "real_tool_ci": true,
+    "smoke_designs": 3,
+    "aggregate_within_k_coverage": true,
+    "aggregate_metric_recomputation": true,
+    "generic_yosys_synthesis": true,
+    "credential_free_genus_template": true
+  },
+  "not_included": {
+    "all_raw_model_responses_for_paper": true,
+    "all_ten_paper_prompts_and_reference_rtl": true,
+    "raw_fpga_reports": true,
+    "raw_genus_and_innovus_reports": true,
+    "proprietary_libraries_or_licenses": true
+  },
+  "scope_notice": "See ARTIFACT_STATUS.md. This release must not be described as a complete raw-data reproduction package until the missing assets are added with licenses and provenance.",
+  "aggregate_data": {
+    "coverage_csv": "paper_results/coverage_within_k.csv",
+    "recompute_script": "paper_results/recompute_aggregate_metrics.py",
+    "expected_output": "paper_results/aggregate_metrics.json"
+  }
+}

@@ -1,0 +1,13 @@
+Generate synthesizable Verilog-2001 for a module named half_adder.
+Interface:
+  input  a
+  input  b
+  output sum
+  output carry
+Behavior:
+  sum is a XOR b.
+  carry is a AND b.
+Constraints:
+  Use an ANSI-style module header.
+  Do not use implicit nets.
+  Output only complete Verilog RTL.

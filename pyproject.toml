@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "llm-rtl-eval"
+version = "1.0.0"
+description = "Reproducible staged evaluation of LLM-generated Verilog RTL"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [
+  {name = "LLM-for-RTL Authors"}
+]
+dependencies = [
+  "requests>=2.31,<3"
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8,<10",
+  "ruff>=0.6,<1"
+]
+
+[project.scripts]
+llm-rtl-eval = "llm_rtl_eval.cli:main"
+llm-rtl-metrics = "llm_rtl_eval.metrics_cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+addopts = "-ra"
+testpaths = ["tests"]
+markers = [
+  "integration: requires Icarus Verilog and Yosys"
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM"]
+ignore = ["E501"]

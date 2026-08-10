@@ -1,0 +1,13 @@
+Generate synthesizable Verilog-2001 for a module named ripple_carry_adder.
+Interface:
+  input  [3:0] a
+  input  [3:0] b
+  input        cin
+  output [3:0] sum
+  output       cout
+Behavior:
+  Implement unsigned addition of a, b, and cin.
+Constraints:
+  Use an ANSI-style module header.
+  Do not use implicit nets.
+  Output only complete Verilog RTL.

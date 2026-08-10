@@ -1,0 +1,20 @@
+cff-version: 1.2.0
+title: "LLM-for-RTL: Staged Evaluation of LLM-Generated Verilog"
+message: "If you use this framework, please cite the accompanying paper and this software release."
+type: software
+version: 1.0.0
+date-released: 2026-07-26
+authors:
+  - family-names: Susan
+    given-names: Hepziba
+  - family-names: G R
+    given-names: Shivaranjani
+  - family-names: Imran
+    given-names: Malik
+  - family-names: Elahi
+    given-names: Muhammad Rashid Fazal
+  - family-names: Gokulanathan
+    given-names: Sumathi
+  - family-names: Ul Abideen
+    given-names: Zain
+license: MIT

@@ -1,0 +1,26 @@
+# Secrets and local configuration
+.env
+*.pem
+*.key
+known_hosts
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.venv/
+venv/
+*.egg-info/
+build/
+dist/
+
+# Generated evaluation artifacts
+results/
+*.log
+
+# Editor and OS files
+.vscode/
+.idea/
+.DS_Store
+*~

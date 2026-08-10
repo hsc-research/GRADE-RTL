@@ -1,0 +1,27 @@
+{
+  "half_adder": {
+    "prompt": "prompts/half_adder.txt",
+    "reference": "reference/half_adder",
+    "top_module": "half_adder",
+    "reference_top": "half_adder",
+    "language": "verilog",
+    "description": "One-bit combinational half adder"
+  },
+  "priority_encoder": {
+    "prompt": "prompts/priority_encoder.txt",
+    "reference": "reference/priority_encoder",
+    "top_module": "priority_encoder",
+    "reference_top": "priority_encoder",
+    "language": "verilog",
+    "require_case_default": true,
+    "description": "Four-input priority encoder with valid flag"
+  },
+  "ripple_carry_adder": {
+    "prompt": "prompts/ripple_carry_adder.txt",
+    "reference": "reference/ripple_carry_adder",
+    "top_module": "ripple_carry_adder",
+    "reference_top": "ripple_carry_adder",
+    "language": "verilog",
+    "description": "Four-bit combinational ripple-carry adder"
+  }
+}

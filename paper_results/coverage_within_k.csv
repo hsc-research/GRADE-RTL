@@ -1,0 +1,91 @@
+design,model,outcome
+Reed Solomon,OriGen,P
+Reed Solomon,RTLCoder,C
+Reed Solomon,VeriGen,P
+Reed Solomon,VeriSeek,P
+Reed Solomon,CodeV,F
+Reed Solomon,Gemini,M
+Reed Solomon,DeepSeek,E
+Reed Solomon,GPT-5,E
+Reed Solomon,Claude,PASS
+PID Controller,OriGen,M
+PID Controller,RTLCoder,PASS
+PID Controller,VeriGen,C
+PID Controller,VeriSeek,C
+PID Controller,CodeV,C
+PID Controller,Gemini,M
+PID Controller,DeepSeek,E
+PID Controller,GPT-5,M
+PID Controller,Claude,PASS
+AES-128,OriGen,P
+AES-128,RTLCoder,P
+AES-128,VeriGen,P
+AES-128,VeriSeek,P
+AES-128,CodeV,P
+AES-128,Gemini,M
+AES-128,DeepSeek,E
+AES-128,GPT-5,E
+AES-128,Claude,PASS
+Present Cipher,OriGen,P
+Present Cipher,RTLCoder,P
+Present Cipher,VeriGen,P
+Present Cipher,VeriSeek,P
+Present Cipher,CodeV,F
+Present Cipher,Gemini,PASS
+Present Cipher,DeepSeek,PASS
+Present Cipher,GPT-5,PASS
+Present Cipher,Claude,PASS
+SHA-256,OriGen,P
+SHA-256,RTLCoder,P
+SHA-256,VeriGen,P
+SHA-256,VeriSeek,P
+SHA-256,CodeV,P
+SHA-256,Gemini,E
+SHA-256,DeepSeek,E
+SHA-256,GPT-5,M
+SHA-256,Claude,M
+Toom-Cook,OriGen,F
+Toom-Cook,RTLCoder,C
+Toom-Cook,VeriGen,P
+Toom-Cook,VeriSeek,C
+Toom-Cook,CodeV,P
+Toom-Cook,Gemini,M
+Toom-Cook,DeepSeek,E
+Toom-Cook,GPT-5,M
+Toom-Cook,Claude,M
+Schoolbook,OriGen,PASS
+Schoolbook,RTLCoder,P
+Schoolbook,VeriGen,C
+Schoolbook,VeriSeek,E
+Schoolbook,CodeV,PASS
+Schoolbook,Gemini,PASS
+Schoolbook,DeepSeek,E
+Schoolbook,GPT-5,M
+Schoolbook,Claude,PASS
+UART 16550,OriGen,E
+UART 16550,RTLCoder,C
+UART 16550,VeriGen,P
+UART 16550,VeriSeek,C
+UART 16550,CodeV,P
+UART 16550,Gemini,M
+UART 16550,DeepSeek,E
+UART 16550,GPT-5,PASS
+UART 16550,Claude,PASS
+uRISC-V,OriGen,F
+uRISC-V,RTLCoder,E
+uRISC-V,VeriGen,E
+uRISC-V,VeriSeek,P
+uRISC-V,CodeV,M
+uRISC-V,Gemini,M
+uRISC-V,DeepSeek,PASS
+uRISC-V,GPT-5,E
+uRISC-V,Claude,E
+Wishbone RAM,OriGen,P
+Wishbone RAM,RTLCoder,C
+Wishbone RAM,VeriGen,P
+Wishbone RAM,VeriSeek,P
+Wishbone RAM,CodeV,P
+Wishbone RAM,Gemini,M
+Wishbone RAM,DeepSeek,PASS
+Wishbone RAM,GPT-5,E
+Wishbone RAM,Claude,PASS
