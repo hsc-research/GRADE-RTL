@@ -1,28 +1,36 @@
 {
-  "schema_version": 1,
-  "release_type": "framework-and-aggregate-results",
-  "framework_version": "1.0.0",
+  "aggregate_data": {
+    "coverage_csv": "paper_results/coverage_within_k.csv",
+    "expected_output": "paper_results/aggregate_metrics.json",
+    "recompute_script": "paper_results/recompute_aggregate_metrics.py"
+  },
+  "framework_version": "1.1.1",
   "included": {
-    "source_code": true,
-    "unit_tests": true,
-    "real_tool_ci": true,
-    "smoke_designs": 3,
-    "aggregate_within_k_coverage": true,
     "aggregate_metric_recomputation": true,
+    "aggregate_within_k_coverage": true,
+    "credential_free_genus_template": true,
+    "environment_doctor": true,
+    "explicit_fixture_replay_live_modes": true,
+    "fixture_replay_live_modes": true,
     "generic_yosys_synthesis": true,
-    "credential_free_genus_template": true
+    "paper_result_gate": true,
+    "real_tool_ci": true,
+    "replay_provenance_verification": true,
+    "run_hash_verification": true,
+    "run_provenance_verifier": true,
+    "smoke_designs": 3,
+    "source_code": true,
+    "source_tree_test_bootstrap": true,
+    "unit_tests": true
   },
   "not_included": {
     "all_raw_model_responses_for_paper": true,
     "all_ten_paper_prompts_and_reference_rtl": true,
+    "proprietary_libraries_or_licenses": true,
     "raw_fpga_reports": true,
-    "raw_genus_and_innovus_reports": true,
-    "proprietary_libraries_or_licenses": true
+    "raw_genus_and_innovus_reports": true
   },
-  "scope_notice": "See ARTIFACT_STATUS.md. This release must not be described as a complete raw-data reproduction package until the missing assets are added with licenses and provenance.",
-  "aggregate_data": {
-    "coverage_csv": "paper_results/coverage_within_k.csv",
-    "recompute_script": "paper_results/recompute_aggregate_metrics.py",
-    "expected_output": "paper_results/aggregate_metrics.json"
-  }
+  "release_type": "framework-and-aggregate-results",
+  "schema_version": 1,
+  "scope_notice": "See ARTIFACT_STATUS.md. This release must not be described as a complete raw-data reproduction package until the missing assets are added with licenses and provenance."
 }

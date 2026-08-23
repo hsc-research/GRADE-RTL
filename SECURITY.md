@@ -20,3 +20,11 @@ latest commit does not remove it from Git history.
 Report suspected vulnerabilities privately to the corresponding author before
 opening a public issue. Do not include live credentials or private infrastructure
 information in a report.
+
+
+## Replay bundles
+
+Replay bundles may contain genuine provider responses. Review them for sensitive
+or proprietary content before redistribution. A replay bundle proves internal
+provenance and hash consistency; it is not a cryptographic signature of the
+external provider.

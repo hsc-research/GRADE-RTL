@@ -1,14 +1,19 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import hashlib
+import json
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import parse_qsl, urlparse
 
 import requests
 
-from .utils import ConfigurationError
+from .run_verifier import RunVerificationError, verify_run
+from .utils import ConfigurationError, sha256_file
+
+ExecutionMode = Literal["fixture", "replay", "live"]
 
 
 @dataclass(slots=True)
@@ -45,8 +50,16 @@ class ProviderError(RuntimeError):
     """Raised when a provider request or response cannot be completed safely."""
 
 
+def _sha256_text(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
 class Provider:
     name = "provider"
+    execution_mode: ExecutionMode = "live"
+    response_origin = "live"
+    paper_eligible = True
+    test_fixture = False
 
     def __init__(self, model: str, settings: GenerationSettings) -> None:
         settings.validate()
@@ -58,10 +71,26 @@ class Provider:
     def generate(self, prompt: str, *, design: str, attempt: int) -> GenerationResponse:
         raise NotImplementedError
 
+    def preflight(self) -> None:
+        """Validate local configuration without contacting the model provider."""
+        return None
+
+    def provenance_metadata(self) -> dict[str, Any]:
+        return {
+            "execution_mode": self.execution_mode,
+            "response_origin": self.response_origin,
+            "provider_paper_eligible": self.paper_eligible,
+            "test_fixture": self.test_fixture,
+        }
+
     def base_metadata(self, *, seed_applied: bool) -> dict[str, Any]:
         return {
             "provider": self.name,
             "model": self.model,
+            "execution_mode": self.execution_mode,
+            "response_origin": self.response_origin,
+            "paper_eligible": self.paper_eligible,
+            "test_fixture": self.test_fixture,
             "temperature": self.settings.temperature,
             "top_p": self.settings.top_p,
             "max_tokens": self.settings.max_tokens,
@@ -112,12 +141,20 @@ class HttpProvider(Provider):
             raise ProviderError(f"{self.name} returned a non-JSON response") from exc
 
 
-class MockProvider(Provider):
-    name = "mock"
+class FixtureProvider(Provider):
+    """Read synthetic deterministic RTL fixtures used only for tests and CI."""
+
+    name = "fixture"
+    execution_mode: ExecutionMode = "fixture"
+    response_origin = "synthetic_fixture"
+    paper_eligible = False
+    test_fixture = True
 
     def __init__(self, root: Path, settings: GenerationSettings) -> None:
-        super().__init__("deterministic-mock", settings)
+        super().__init__("synthetic-fixture", settings)
         self.root = root.resolve()
+        if not self.root.is_dir():
+            raise ConfigurationError(f"Fixture directory does not exist: {self.root}")
 
     def generate(self, prompt: str, *, design: str, attempt: int) -> GenerationResponse:
         directory = self.root / design
@@ -130,12 +167,264 @@ class MockProvider(Provider):
                         **self.base_metadata(seed_applied=False),
                         "source": path.relative_to(self.root).as_posix(),
                         "prompt_length": len(prompt),
-                        "deterministic_mock": True,
+                        "fixture_kind": "synthetic_rtl",
                     },
                 )
         raise FileNotFoundError(
-            f"No mock response for {design} attempt {attempt}; checked {candidates}"
+            "No synthetic fixture response for "
+            f"{design} attempt {attempt}; checked "
+            + ", ".join(str(path) for path in candidates)
+            + ". Add attempt_N.v or default.v under fixtures/llm_outputs. "
+            "If this additional attempt was unexpected, inspect the previous attempt's "
+            "first-failure stage and tool log for a validation regression."
         )
+
+
+# Backwards-compatible import alias. Public documentation uses FixtureProvider.
+MockProvider = FixtureProvider
+
+
+class ReplayProvider(Provider):
+    """Replay provenance-checked responses from an earlier genuine live run.
+
+    The source may be either a complete GRADE-RTL run directory containing
+    ``run_manifest.json`` or a compact bundle created by
+    ``scripts/export_replay.py`` containing ``replay_manifest.json``.
+    """
+
+    name = "replay"
+    execution_mode: ExecutionMode = "replay"
+    response_origin = "recorded_live"
+    test_fixture = False
+
+    def __init__(
+        self,
+        source: Path,
+        settings: GenerationSettings,
+        *,
+        expected_model: str | None = None,
+    ) -> None:
+        self.source = source.resolve()
+        run_manifest = self.source / "run_manifest.json"
+        bundle_manifest = self.source / "replay_manifest.json"
+        if run_manifest.is_file():
+            self.source_kind = "run"
+            manifest_path = run_manifest
+        elif bundle_manifest.is_file():
+            self.source_kind = "bundle"
+            manifest_path = bundle_manifest
+        else:
+            raise ConfigurationError(
+                "Replay source must contain run_manifest.json or replay_manifest.json: "
+                f"{self.source}"
+            )
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise ConfigurationError(f"Invalid replay manifest: {manifest_path}") from exc
+        if self.source_kind == "run":
+            try:
+                verify_run(self.source)
+            except RunVerificationError as exc:
+                raise ConfigurationError(
+                    f"Replay source run failed provenance/hash verification: {exc}"
+                ) from exc
+            if manifest.get("schema_version") != 2:
+                raise ConfigurationError(
+                    "Replay run manifest must use schema_version 2; "
+                    "rerun with GRADE-RTL v1.1.0 or later"
+                )
+            source_mode = str(manifest.get("execution_mode", ""))
+            if source_mode not in {"live", "replay"}:
+                raise ConfigurationError(
+                    "Replay requires a provenance-enabled live or replay run. "
+                    "Fixture/synthetic runs cannot be replayed as genuine LLM outputs."
+                )
+            if manifest.get("test_fixture") is True:
+                raise ConfigurationError("Synthetic fixture runs cannot be used in replay mode")
+            source_provider = str(manifest.get("provider", "")).strip()
+            source_model = str(manifest.get("model", "")).strip()
+            self.paper_eligible = bool(
+                manifest.get("paper_result") is True
+                and manifest.get("tool_mode") == "real"
+                and manifest.get("provider_paper_eligible") is True
+            )
+            self.source_run_id = self.source.name
+        else:
+            if manifest.get("schema_version") != 1:
+                raise ConfigurationError("Replay bundle must use schema_version 1")
+            if manifest.get("origin") != "recorded_live":
+                raise ConfigurationError(
+                    "Replay bundle origin must be 'recorded_live'; synthetic fixtures are rejected"
+                )
+            source_provider = str(manifest.get("provider", "")).strip()
+            source_model = str(manifest.get("model", "")).strip()
+            self.paper_eligible = manifest.get("paper_eligible") is True
+            self.source_run_id = str(manifest.get("source_run_id", self.source.name))
+        if not source_provider or not source_model:
+            raise ConfigurationError("Replay manifest is missing provider/model provenance")
+        if expected_model and expected_model != source_model:
+            raise ConfigurationError(
+                f"Replay source model is {source_model!r}, not requested model {expected_model!r}"
+            )
+        self.source_manifest = manifest
+        self.source_provider = source_provider
+        super().__init__(source_model, settings)
+
+    def provenance_metadata(self) -> dict[str, Any]:
+        return {
+            **super().provenance_metadata(),
+            "replay_source_kind": self.source_kind,
+            "replay_source_run": self.source_run_id,
+            "replay_source_provider": self.source_provider,
+            "replay_source_model": self.model,
+            "replay_source_paper_result": self.paper_eligible,
+        }
+
+    def _generate_from_run(self, prompt: str, *, design: str, attempt: int) -> GenerationResponse:
+        attempt_dir = self.source / design / f"attempt_{attempt}"
+        prompt_path = attempt_dir / "prompt.txt"
+        raw_path = attempt_dir / "raw_response.txt"
+        metadata_path = attempt_dir / "generation_metadata.json"
+        missing = [path.name for path in (prompt_path, raw_path, metadata_path) if not path.is_file()]
+        if missing:
+            raise FileNotFoundError(
+                f"Replay source lacks {', '.join(missing)} for {design} attempt {attempt}: "
+                f"{attempt_dir}"
+            )
+        try:
+            source_metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise ConfigurationError(f"Invalid replay metadata: {metadata_path}") from exc
+        if source_metadata.get("test_fixture") is True:
+            raise ConfigurationError("Synthetic fixture metadata cannot be replayed")
+        if source_metadata.get("response_origin") not in {"live", "recorded_live"}:
+            raise ConfigurationError(
+                "Replay source lacks genuine live-response provenance. "
+                "Create a new live run with GRADE-RTL v1.1.0 or later."
+            )
+        if source_metadata.get("provider") != self.source_provider:
+            raise ConfigurationError(f"Replay provider mismatch in {metadata_path}")
+        if source_metadata.get("model") != self.model:
+            raise ConfigurationError(f"Replay model mismatch in {metadata_path}")
+        if source_metadata.get("paper_eligible") is not True and self.paper_eligible:
+            raise ConfigurationError(
+                f"Replay source claims paper eligibility but attempt does not: {metadata_path}"
+            )
+        source_prompt = prompt_path.read_text(encoding="utf-8")
+        source_prompt_hash = _sha256_text(source_prompt)
+        recorded_prompt_hash = source_metadata.get("prompt_sha256")
+        if recorded_prompt_hash and recorded_prompt_hash != source_prompt_hash:
+            raise ConfigurationError(f"Replay prompt checksum mismatch in {metadata_path}")
+        if _sha256_text(prompt) != source_prompt_hash:
+            raise ConfigurationError(
+                f"Replay prompt mismatch for {design} attempt {attempt}. "
+                "Use the same prompts/configuration as the source run."
+            )
+        actual_response_hash = sha256_file(raw_path)
+        recorded_response_hash = source_metadata.get("raw_response_sha256")
+        if recorded_response_hash and recorded_response_hash != actual_response_hash:
+            raise ConfigurationError(f"Replay response checksum mismatch in {metadata_path}")
+        return self._response(
+            raw_path.read_text(encoding="utf-8"),
+            source_metadata=source_metadata,
+            design=design,
+            attempt=attempt,
+            prompt_hash=source_prompt_hash,
+            response_hash=actual_response_hash,
+        )
+
+    def _generate_from_bundle(
+        self, prompt: str, *, design: str, attempt: int
+    ) -> GenerationResponse:
+        prompt_path = self.source / design / f"attempt_{attempt}.prompt.txt"
+        response_path = self.source / design / f"attempt_{attempt}.txt"
+        metadata_path = self.source / design / f"attempt_{attempt}.json"
+        if not response_path.is_file() or not metadata_path.is_file():
+            raise FileNotFoundError(
+                f"Replay bundle lacks response/metadata for {design} attempt {attempt}: "
+                f"{response_path.parent}"
+            )
+        try:
+            source_metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise ConfigurationError(f"Invalid replay metadata: {metadata_path}") from exc
+        if source_metadata.get("schema_version") != 1:
+            raise ConfigurationError(f"Replay attempt must use schema_version 1: {metadata_path}")
+        if source_metadata.get("origin") != "recorded_live":
+            raise ConfigurationError(f"Replay attempt origin is not recorded_live: {metadata_path}")
+        if source_metadata.get("provider") != self.source_provider:
+            raise ConfigurationError(f"Replay provider mismatch: {metadata_path}")
+        if source_metadata.get("model") != self.model:
+            raise ConfigurationError(f"Replay model mismatch: {metadata_path}")
+        if source_metadata.get("design") != design or source_metadata.get("attempt") != attempt:
+            raise ConfigurationError(f"Replay design/attempt mismatch: {metadata_path}")
+        if source_metadata.get("paper_eligible") is not True and self.paper_eligible:
+            raise ConfigurationError(
+                f"Replay bundle is paper-eligible but attempt is not: {metadata_path}"
+            )
+        prompt_hash = _sha256_text(prompt)
+        if prompt_path.is_file():
+            archived_prompt = prompt_path.read_text(encoding="utf-8")
+            archived_prompt_hash = _sha256_text(archived_prompt)
+            if archived_prompt_hash != source_metadata.get("prompt_sha256"):
+                raise ConfigurationError(f"Replay archived prompt hash mismatch: {prompt_path}")
+            if archived_prompt != prompt:
+                raise ConfigurationError(
+                    f"Replay prompt mismatch for {design} attempt {attempt}"
+                )
+        if source_metadata.get("prompt_sha256") != prompt_hash:
+            raise ConfigurationError(
+                f"Replay prompt hash mismatch for {design} attempt {attempt}"
+            )
+        response_hash = sha256_file(response_path)
+        if source_metadata.get("response_sha256") != response_hash:
+            raise ConfigurationError(f"Replay response hash mismatch: {response_path}")
+        return self._response(
+            response_path.read_text(encoding="utf-8"),
+            source_metadata=source_metadata,
+            design=design,
+            attempt=attempt,
+            prompt_hash=prompt_hash,
+            response_hash=response_hash,
+        )
+
+    def _response(
+        self,
+        text: str,
+        *,
+        source_metadata: dict[str, Any],
+        design: str,
+        attempt: int,
+        prompt_hash: str,
+        response_hash: str,
+    ) -> GenerationResponse:
+        return GenerationResponse(
+            text,
+            {
+                **source_metadata,
+                "provider": "replay",
+                "model": self.model,
+                "execution_mode": "replay",
+                "response_origin": "recorded_live",
+                "paper_eligible": self.paper_eligible,
+                "test_fixture": False,
+                "replay_verified": True,
+                "replay_source_kind": self.source_kind,
+                "replay_source_run": self.source_run_id,
+                "replay_source_provider": self.source_provider,
+                "replay_source_model": self.model,
+                "replay_source_attempt": attempt,
+                "replay_design": design,
+                "replay_prompt_sha256": prompt_hash,
+                "replay_response_sha256": response_hash,
+            },
+        )
+
+    def generate(self, prompt: str, *, design: str, attempt: int) -> GenerationResponse:
+        if self.source_kind == "run":
+            return self._generate_from_run(prompt, design=design, attempt=attempt)
+        return self._generate_from_bundle(prompt, design=design, attempt=attempt)
 
 
 class OpenAICompatibleProvider(HttpProvider):
@@ -158,6 +447,9 @@ class OpenAICompatibleProvider(HttpProvider):
         if token_field not in {"max_tokens", "max_completion_tokens"}:
             raise ConfigurationError(f"Unsupported token field: {token_field}")
         self.token_field = token_field
+
+    def preflight(self) -> None:
+        self.require_key(self.api_key_env)
 
     def generate(self, prompt: str, *, design: str, attempt: int) -> GenerationResponse:
         key = self.require_key(self.api_key_env)
@@ -199,6 +491,9 @@ class OpenAICompatibleProvider(HttpProvider):
 class AnthropicProvider(HttpProvider):
     name = "anthropic"
 
+    def preflight(self) -> None:
+        self.require_key("ANTHROPIC_API_KEY")
+
     def generate(self, prompt: str, *, design: str, attempt: int) -> GenerationResponse:
         key = self.require_key("ANTHROPIC_API_KEY")
         payload = {
@@ -218,7 +513,9 @@ class AnthropicProvider(HttpProvider):
         )
         data = self.response_json(response)
         blocks = data.get("content", [])
-        text = "".join(str(block.get("text", "")) for block in blocks if block.get("type") == "text")
+        text = "".join(
+            str(block.get("text", "")) for block in blocks if block.get("type") == "text"
+        )
         if not text:
             raise ProviderError("Anthropic response contained no text blocks")
         return GenerationResponse(
@@ -237,6 +534,9 @@ class AnthropicProvider(HttpProvider):
 
 class GeminiProvider(HttpProvider):
     name = "gemini"
+
+    def preflight(self) -> None:
+        self.require_key("GEMINI_API_KEY")
 
     def generate(self, prompt: str, *, design: str, attempt: int) -> GenerationResponse:
         key = self.require_key("GEMINI_API_KEY")
@@ -367,10 +667,17 @@ def create_provider(
     settings: GenerationSettings,
     *,
     repository_root: Path,
+    fixture_root: Path | None = None,
 ) -> Provider:
+    """Create a fixture or live provider.
+
+    Replay mode is created explicitly with ReplayProvider because it requires a
+    source run path rather than a provider endpoint.
+    """
     normalized = name.lower()
-    if normalized == "mock":
-        return MockProvider(repository_root / "mock_responses", settings)
+    if normalized in {"fixture", "mock"}:
+        root = fixture_root or repository_root / "fixtures" / "llm_outputs"
+        return FixtureProvider(root, settings)
     if normalized == "ollama":
         host = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
         return OllamaProvider(
@@ -403,7 +710,9 @@ def create_provider(
         return AnthropicProvider(
             _required_model(model, "ANTHROPIC_MODEL"),
             settings,
-            endpoint=os.environ.get("ANTHROPIC_ENDPOINT", "https://api.anthropic.com/v1/messages"),
+            endpoint=os.environ.get(
+                "ANTHROPIC_ENDPOINT", "https://api.anthropic.com/v1/messages"
+            ),
             api_key=os.environ.get("ANTHROPIC_API_KEY"),
         )
     if normalized == "gemini":
@@ -431,5 +740,6 @@ def create_provider(
             api_key=os.environ.get("HF_TOKEN") or os.environ.get("HF_API_KEY"),
         )
     raise ConfigurationError(
-        f"Unknown provider {name!r}; choose mock, ollama, openai, deepseek, anthropic, gemini, or huggingface"
+        f"Unknown provider {name!r}; choose fixture, ollama, openai, deepseek, "
+        "anthropic, gemini, or huggingface"
     )

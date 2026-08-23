@@ -17,7 +17,7 @@ def test_generic_synthesis_script_uses_tee_for_stat_json(
 
     monkeypatch.setattr(synthesis.shutil, "which", lambda _: "/usr/bin/yosys")
 
-    def fake_run(argv, *, cwd, timeout):
+    def stub_run(argv, *, cwd, timeout):
         script_path = Path(argv[-1])
         script = script_path.read_text(encoding="utf-8")
         assert "tee -q -o" in script
@@ -27,7 +27,7 @@ def test_generic_synthesis_script_uses_tee_for_stat_json(
         (output / "stat.json").write_text(json.dumps({"modules": {}}), encoding="utf-8")
         return 0, "ok"
 
-    monkeypatch.setattr(synthesis, "run_command", fake_run)
+    monkeypatch.setattr(synthesis, "run_command", stub_run)
     result = synthesis.run_generic_yosys_synthesis(
         rtl, top_module="top", output_dir=output
     )

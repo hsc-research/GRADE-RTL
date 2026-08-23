@@ -20,6 +20,8 @@ TEXT_SUFFIXES = {".py", ".md", ".json", ".txt", ".yml", ".yaml", ".cff", ".toml"
 
 REQUIRED_FILES = [
     "README.md",
+    "MODES.md",
+    "MIGRATION.md",
     "ARTIFACT_STATUS.md",
     "PUBLIC_RELEASE_CHECKLIST.md",
     "SECURITY.md",
@@ -44,8 +46,11 @@ REQUIRED_FILES = [
     "paper_results/aggregate_metrics.json",
     "paper_results/recompute_aggregate_metrics.py",
     "scripts/generate_checksums.py",
+    "scripts/export_replay.py",
     "scripts/synthesize.py",
     "synthesis/genus_template.tcl",
+    "src/llm_rtl_eval/run_verifier.py",
+    "src/llm_rtl_eval/doctor.py",
     ".github/workflows/tests.yml",
 ]
 
@@ -139,8 +144,8 @@ def verify_design_assets(errors: list[str]) -> None:
             continue
         prompt = ROOT / str(config.get("prompt", f"prompts/{name}.txt"))
         reference = ROOT / str(config.get("reference", f"reference/{name}"))
-        mock = ROOT / "mock_responses" / name
-        for label, path in (("prompt", prompt), ("reference", reference), ("mock response", mock)):
+        fixture = ROOT / "fixtures" / "llm_outputs" / name
+        for label, path in (("prompt", prompt), ("reference", reference), ("fixture response", fixture)):
             try:
                 path.resolve().relative_to(ROOT.resolve())
             except ValueError:
@@ -154,8 +159,21 @@ def verify_design_assets(errors: list[str]) -> None:
             files = [reference] if reference.is_file() else [*reference.rglob("*.v"), *reference.rglob("*.sv")]
             if not files:
                 errors.append(f"no Verilog reference files for {name}")
-        if mock.exists() and not list(mock.glob("*.v")):
-            errors.append(f"no Verilog mock responses for {name}")
+        if fixture.exists() and not list(fixture.glob("*.v")):
+            errors.append(f"no Verilog fixture responses for {name}")
+
+
+def verify_mode_separation(errors: list[str]) -> None:
+    if (ROOT / "mock_responses").exists():
+        errors.append("legacy mock_responses directory must be renamed to fixtures/llm_outputs")
+    fixtures = ROOT / "fixtures" / "llm_outputs"
+    if not fixtures.is_dir():
+        errors.append("missing fixtures/llm_outputs directory")
+    readme = (ROOT / "README.md").read_text(encoding="utf-8", errors="ignore")
+    modes = (ROOT / "MODES.md").read_text(encoding="utf-8", errors="ignore")
+    for name in ("fixture", "replay", "live"):
+        if name not in readme.lower() or name not in modes.lower():
+            errors.append(f"mode documentation is incomplete for {name}")
 
 
 def verify_secrets(errors: list[str]) -> None:
@@ -252,6 +270,13 @@ def verify_paper_metrics(errors: list[str]) -> None:
         temp.unlink(missing_ok=True)
 
 
+
+def verify_doctor(errors: list[str]) -> None:
+    result = run([sys.executable, "-m", "llm_rtl_eval.doctor"])
+    if result.returncode != 0:
+        errors.append("environment doctor failed:\n" + result.stdout)
+
+
 def verify_tools(require: bool, errors: list[str], warnings: list[str]) -> None:
     for name in ("iverilog", "yosys"):
         if shutil.which(name) is None:
@@ -268,8 +293,8 @@ def verify_smoke(errors: list[str]) -> None:
         [
             sys.executable,
             "run_all.py",
-            "--provider",
-            "mock",
+            "--mode",
+            "fixture",
             "--all",
             "--k",
             "3",
@@ -283,10 +308,36 @@ def verify_smoke(errors: list[str]) -> None:
             errors.append("real-tool smoke run failed:\n" + result.stdout)
             return
         metrics = json.loads((run_root / "metrics.json").read_text(encoding="utf-8"))
+        manifest = json.loads((run_root / "run_manifest.json").read_text(encoding="utf-8"))
+        attempts = json.loads((run_root / "attempts.json").read_text(encoding="utf-8"))
         if abs(metrics["e2e_at_1"] - 2 / 3) > 1e-9:
             errors.append("smoke E2E@1 is not 2/3")
         if metrics["e2e_at_k"] != 1.0 or metrics["sey_at_k"] != 1.0:
             errors.append("smoke E2E@3 and SEY@3 must both be 1.0")
+        expected_attempts = {
+            "priority_encoder": 1,
+            "ripple_carry_adder": 1,
+            "half_adder": 2,
+        }
+        for design, expected in expected_attempts.items():
+            actual = len(attempts.get(design, []))
+            if actual != expected:
+                errors.append(
+                    f"smoke {design} used {actual} attempts; expected {expected}"
+                )
+        if manifest.get("execution_mode") != "fixture":
+            errors.append("smoke run must use fixture mode")
+        if manifest.get("response_origin") != "synthetic_fixture":
+            errors.append("smoke run must record synthetic_fixture origin")
+        if manifest.get("tool_mode") != "real":
+            errors.append("smoke run must use real Icarus Verilog and Yosys")
+        if manifest.get("paper_result") is not False:
+            errors.append("fixture smoke run must never be marked as a paper result")
+        verification = run(
+            [sys.executable, "-m", "llm_rtl_eval.run_verifier", str(run_root)]
+        )
+        if verification.returncode != 0:
+            errors.append("smoke run provenance verification failed:\n" + verification.stdout)
     finally:
         shutil.rmtree(ROOT / "results", ignore_errors=True)
         cleanup_caches()
@@ -340,6 +391,44 @@ def verify_checksums(errors: list[str]) -> None:
         errors.append(f"unexpected checksum entry: {relative}")
 
 
+
+def verify_version_consistency(errors: list[str]) -> None:
+    """Ensure public metadata reports one release version."""
+    try:
+        pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+        init_text = (ROOT / "src/llm_rtl_eval/__init__.py").read_text(encoding="utf-8")
+        citation = (ROOT / "CITATION.cff").read_text(encoding="utf-8")
+        artifact = json.loads(
+            (ROOT / "paper_artifact_manifest.json").read_text(encoding="utf-8")
+        )
+    except (OSError, json.JSONDecodeError) as exc:
+        errors.append(f"cannot verify release versions: {exc}")
+        return
+    matches = {
+        "pyproject.toml": re.search(r'(?m)^version\s*=\s*"([^"]+)"', pyproject),
+        "src/llm_rtl_eval/__init__.py": re.search(
+            r'(?m)^__version__\s*=\s*"([^"]+)"', init_text
+        ),
+        "CITATION.cff": re.search(r'(?m)^version:\s*["\']?([^"\'\s]+)', citation),
+    }
+    versions: dict[str, str] = {}
+    for source, match in matches.items():
+        if match is None:
+            errors.append(f"could not find version in {source}")
+        else:
+            versions[source] = match.group(1)
+    artifact_version = artifact.get("framework_version")
+    if not isinstance(artifact_version, str):
+        errors.append("paper_artifact_manifest.json lacks framework_version")
+    else:
+        versions["paper_artifact_manifest.json"] = artifact_version
+    if versions and len(set(versions.values())) != 1:
+        errors.append(
+            "release version mismatch: "
+            + ", ".join(f"{source}={value}" for source, value in versions.items())
+        )
+
+
 def verify_public_release(errors: list[str]) -> None:
     for relative in ("LICENSE", "THIRD_PARTY_LICENSES.md", "paper_artifact_manifest.json", "ARTIFACT_STATUS.md"):
         path = ROOT / relative
@@ -358,17 +447,22 @@ def verify_public_release(errors: list[str]) -> None:
 
 def main() -> int:
     args = parse_args()
+    # Remove harmless local caches before evaluating release-tree hygiene.
+    cleanup_caches()
     errors: list[str] = []
     warnings: list[str] = []
     verify_required_files(errors)
     verify_python_syntax(errors)
     verify_design_assets(errors)
+    verify_mode_separation(errors)
     verify_secrets(errors)
     verify_unsafe_code(errors)
     verify_clean_tree(errors)
     verify_citation(errors)
+    verify_version_consistency(errors)
     verify_tests(errors)
     verify_paper_metrics(errors)
+    verify_doctor(errors)
     verify_tools(args.require_tools or args.smoke, errors, warnings)
     if args.smoke and not any("not installed" in item for item in errors):
         verify_smoke(errors)

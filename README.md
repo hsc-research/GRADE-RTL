@@ -1,45 +1,67 @@
-# LLM-for-RTL Evaluation Framework
+# GRADE-RTL
 
-A reproducible, failure-localizing framework for evaluating Verilog RTL generated
-by large language models. Each candidate passes through five front-end stages:
+**Generated RTL Assessment through Design-flow Evaluation**
+
+GRADE-RTL evaluates LLM-generated Verilog/SystemVerilog through five ordered
+front-end stages:
 
 ```text
-Port Signature (P) -> Compilation (C) -> Elaboration (E)
-                    -> Module Completeness (M) -> Functional Equivalence (F)
+P: Port Signature
+C: Compilation
+E: Elaboration
+M: Module Completeness
+F: Functional Equivalence
 ```
 
-Synthesis is intentionally separate from the correctness scorecard. A candidate
-is **synthesis-eligible** after passing Compilation and Elaboration, but it is
-counted as end-to-end correct only after passing all five stages.
+The framework preserves every prompt, response, extracted RTL candidate, tool
+script, tool log, stage result, hash, and run manifest. Synthesis is optional
+and is not treated as a sixth correctness stage.
 
-## Release scope
+> **Artifact scope.** This release contains the executable framework, three
+> author-created smoke designs, tests, provider adapters, and aggregate
+> within-budget manuscript data. It is not a complete raw archive for all
+> paper experiments. See [ARTIFACT_STATUS.md](ARTIFACT_STATUS.md).
 
-This release contains the evaluation framework, three author-created smoke-test
-designs, tests, CI, aggregate manuscript coverage data, generic Yosys synthesis,
-and a credential-free Cadence Genus template. It does not contain proprietary
-libraries or every raw paper experiment. Read [ARTIFACT_STATUS.md](ARTIFACT_STATUS.md)
-before describing the package as a complete paper artifact.
+## Three response modes
 
-## Why this version is safe to publish
+GRADE-RTL makes the source of generated RTL explicit:
 
-- no API keys, SSH passwords, private hostnames, or institution-specific paths;
-- no `sshpass`, disabled TLS verification, or disabled SSH host verification;
-- import-safe modules: importing the package performs no network or EDA action;
-- isolated run directories with explicit overwrite protection;
-- every attempt preserves the prompt, raw response, extracted RTL, logs,
-  metadata, hashes, and stage outcome;
-- deterministic mock mode for offline testing;
-- repository verifier and GitHub Actions workflow.
+| Mode | Response source | Calls an LLM? | Paper-result eligible? |
+|---|---|---:|---:|
+| `fixture` | Synthetic deterministic test RTL | No | **No** |
+| `replay` | Archived response from a provenance-checked live run | No | Only if the source run passed the paper-result gate |
+| `live` | A new local/API LLM call | Yes | Yes, with real EDA tools and `--paper-run` |
 
-If credentials were committed in any earlier repository revision, rotate them
-and publish this tree from a clean Git history. See [SECURITY.md](SECURITY.md).
+The response mode is independent of the EDA tools. The normal CLI always uses
+real Icarus Verilog and Yosys. Short-lived tool stubs exist only inside unit
+tests to exercise Python orchestration; they cannot be marked as paper data.
 
-## Requirements
+Print the mode guide at any time:
+
+```bash
+llm-rtl-eval --describe-modes
+```
+
+A detailed explanation is available in [MODES.md](MODES.md).
+
+Select the mode explicitly with `--mode`:
+
+```text
+fixture -> test the framework with synthetic RTL
+live    -> call a real model and collect a new response
+replay  -> rerun a previously recorded genuine response
+```
+
+The legacy `--provider mock` spelling remains accepted only for backwards
+compatibility and is always treated as non-paper fixture data.
+
+## Installation
+
+Requirements:
 
 - Python 3.10 or newer
 - Icarus Verilog (`iverilog`)
 - Yosys
-- `requests`
 
 Ubuntu/Debian example:
 
@@ -52,19 +74,36 @@ python -m pip install --upgrade pip
 python -m pip install -e '.[dev]'
 ```
 
-For an offline environment with build dependencies already installed:
+Verify the checkout before running an experiment:
 
 ```bash
-python -m pip install -e . --no-build-isolation
+llm-rtl-doctor --require-tools
 ```
 
-## Quick start: deterministic smoke test
-
-The bundled mock run intentionally makes `half_adder` fail its first interface
-check and recover on attempt 2. The other two designs pass on attempt 1.
+A successful check reports real Icarus Verilog and Yosys, the configured
+benchmark count, and the fixture directory. Without installation, the same
+source-tree check can be run as:
 
 ```bash
-llm-rtl-eval --provider mock --all --k 3 --run-id smoke
+PYTHONPATH=src python -m llm_rtl_eval.doctor --require-tools
+```
+
+## Quick start
+
+GRADE-RTL requires an explicit `--design DESIGN` selection or `--all`; it never
+starts live/provider calls for an implicit design set.
+
+### 1. Fixture mode: deterministic smoke test
+
+Fixture mode uses synthetic RTL in `fixtures/llm_outputs/`. It is designed for
+CI and local verification and is never accepted as paper data.
+
+```bash
+llm-rtl-eval \
+  --mode fixture \
+  --all \
+  --k 3 \
+  --run-id fixture-smoke
 ```
 
 Expected aggregate behavior:
@@ -75,10 +114,173 @@ E2E@3 = 3/3
 SEY@3 = 3/3
 ```
 
-Outputs are written to:
+The intended attempt pattern is:
+
+- `priority_encoder`: passes on attempt 1;
+- `ripple_carry_adder`: passes on attempt 1;
+- `half_adder`: fails its first interface check and passes on attempt 2.
+
+Verify the run:
+
+```bash
+llm-rtl-verify-run results/fixture-smoke
+```
+
+The verifier will report `mode=fixture`, `origin=synthetic_fixture`, and
+`paper_result_eligible=false`.
+
+Legacy commands using `--provider mock` are accepted as fixture mode, but new
+scripts should use `--mode fixture`.
+
+### 2. Live mode: call an actual model
+
+Export credentials privately; never commit `.env` or API keys.
+
+```bash
+export OPENAI_API_KEY='...'
+export OPENAI_MODEL='EXACT_MODEL_IDENTIFIER'
+
+llm-rtl-eval \
+  --mode live \
+  --provider openai \
+  --model "$OPENAI_MODEL" \
+  --design half_adder \
+  --k 3 \
+  --temperature 0 \
+  --top-p 1 \
+  --seed 7 \
+  --run-id live-openai-half-adder \
+  --paper-run
+```
+
+Supported live providers and their usual environment variables:
+
+| Provider | Credential | Model setting | Optional endpoint setting |
+|---|---|---|---|
+| `ollama` | none for localhost | `OLLAMA_MODEL` or `--model` | `OLLAMA_HOST` |
+| `openai` | `OPENAI_API_KEY` | `OPENAI_MODEL` or `--model` | `OPENAI_BASE_URL` |
+| `deepseek` | `DEEPSEEK_API_KEY` | `DEEPSEEK_MODEL` or `--model` | `DEEPSEEK_BASE_URL` |
+| `anthropic` | `ANTHROPIC_API_KEY` | `ANTHROPIC_MODEL` or `--model` | `ANTHROPIC_ENDPOINT` |
+| `gemini` | `GEMINI_API_KEY` | `GEMINI_MODEL` or `--model` | `GEMINI_ENDPOINT` |
+| `huggingface` | `HF_TOKEN` or `HF_API_KEY` | `HF_MODEL` or `--model` | `HF_ENDPOINT` |
+
+Use exact model identifiers and keep credentials in the shell environment. The
+`.env.example` file lists the supported variables, but GRADE-RTL does not load
+or commit secrets automatically. Check a provider configuration without making
+an API call:
+
+```bash
+llm-rtl-doctor --require-tools --provider openai --model EXACT_MODEL_IDENTIFIER
+```
+
+`--paper-run` is optional but recommended for a run intended to support a
+publication. It is accepted only when the response source is live/replay and
+real Icarus Verilog and Yosys are detected.
+
+Verify a publication run strictly:
+
+```bash
+llm-rtl-verify-run \
+  --require-paper-result \
+  results/live-openai-half-adder
+```
+
+### 3. Replay mode: rerun a genuine archived response
+
+Replay mode makes no model/API call. It re-evaluates the exact prompts and raw
+responses from a prior provenance-enabled run.
+
+Directly replay a completed run directory:
+
+```bash
+llm-rtl-eval \
+  --mode replay \
+  --replay-source results/live-openai-half-adder \
+  --design half_adder \
+  --k 3 \
+  --run-id replay-openai-half-adder \
+  --paper-run
+```
+
+The current prompts must hash-match the source prompts. Raw-response hashes and
+provenance metadata are also checked before evaluation.
+
+For a smaller shareable replay bundle, export a live run that passed the paper-result gate:
+
+```bash
+python scripts/export_replay.py \
+  results/live-openai-half-adder \
+  replay_bundles/openai-half-adder
+```
+
+Then replay it:
+
+```bash
+llm-rtl-eval \
+  --mode replay \
+  --replay-source replay_bundles/openai-half-adder \
+  --design half_adder \
+  --k 3 \
+  --run-id replay-bundle-openai-half-adder \
+  --paper-run
+```
+
+Fixture runs cannot be exported or replayed as genuine model data.
+
+## How mode and provenance are detected
+
+Every `results/RUN/run_manifest.json` records:
+
+```json
+{
+  "execution_mode": "fixture | replay | live",
+  "response_origin": "synthetic_fixture | recorded_live | live",
+  "tool_mode": "stub | real",
+  "provider_paper_eligible": true,
+  "paper_result_eligible": true,
+  "paper_result": true
+}
+```
+
+Each attempt's `generation_metadata.json` repeats the mode/origin flags and
+stores prompt, response, and RTL hashes. Use:
+
+```bash
+llm-rtl-verify-run results/RUN
+```
+
+A run can support paper results only when all of the following hold:
 
 ```text
-results/smoke/
+execution_mode in {live, replay}
+response_origin in {live, recorded_live}
+test_fixture = false
+tool_mode = real
+paper_result_eligible = true
+paper_result = true
+```
+
+## GitHub Actions troubleshooting
+
+If the real-tool integration test requests an unexpected second fixture
+attempt, inspect the previous attempt's `M_yosys.log` and first-failure field.
+GRADE-RTL v1.1.1 fixes a previous false positive in which Yosys output
+`No latch inferred ...` was misread as an inferred latch. The regression suite
+now distinguishes positive and negative latch messages and asserts the expected
+attempt count for every smoke design.
+
+Run the same gates locally before pushing:
+
+```bash
+pytest -q -p no:cacheprovider
+llm-rtl-doctor --require-tools
+python scripts/verify_repository.py --require-tools --smoke
+```
+
+## Output structure
+
+```text
+results/RUN/
 ├── run_manifest.json
 ├── attempts.json
 ├── results.csv
@@ -93,63 +295,14 @@ results/smoke/
     └── P/C/E/M/F scripts and logs
 ```
 
-## Running a real provider
-
-Copy `.env.example` to a private shell configuration and export only the
-variables for the chosen provider. Never commit `.env`.
-
-OpenAI-compatible example:
-
-```bash
-export OPENAI_API_KEY='...'
-export OPENAI_MODEL='EXACT_MODEL_IDENTIFIER'
-llm-rtl-eval \
-  --provider openai \
-  --model "$OPENAI_MODEL" \
-  --design half_adder \
-  --k 3 \
-  --temperature 0 \
-  --top-p 1 \
-  --seed 7 \
-  --run-id openai-half-adder
-```
-
-Supported adapters:
-
-- `mock`
-- `ollama`
-- `openai`
-- `deepseek`
-- `anthropic`
-- `gemini`
-- `huggingface`
-
-Provider metadata records the exact requested model, endpoint, sampling controls,
-seed request, whether the provider accepted the seed, provider-reported model and
-usage fields when returned, tool versions, and content hashes. API keys are never
-written to results. The deterministic mock provider records a requested seed but
-correctly marks it as not applied.
-
-The OpenAI adapter defaults to the current `max_completion_tokens` field; set
-`OPENAI_TOKEN_FIELD=max_tokens` only for a compatible endpoint that requires the
-legacy field. The Hugging Face adapter uses the OpenAI-compatible inference router
-at `https://router.huggingface.co/v1/chat/completions` and accepts `HF_TOKEN` (or
-`HF_API_KEY` as a compatibility alias).
-
-Plain HTTP is rejected for remote provider endpoints, embedded credentials and
-credential-bearing query parameters are rejected, and provider error bodies are
-not copied into logs. Plain HTTP is allowed only for localhost, enabling a local
-Ollama server.
-
 ## Adding a design
 
 1. Add a fixed prompt under `prompts/`.
 2. Add trusted reference RTL under `reference/DESIGN/`.
 3. Add an entry to `designs.json`.
-4. Optionally add deterministic mock responses under
-   `mock_responses/DESIGN/attempt_N.v`.
-5. Preserve any third-party RTL license and update
-   `THIRD_PARTY_LICENSES.md`.
+4. For fixture testing only, add synthetic responses under
+   `fixtures/llm_outputs/DESIGN/attempt_N.v` or `default.v`.
+5. Preserve third-party RTL licenses and update `THIRD_PARTY_LICENSES.md`.
 
 Example configuration:
 
@@ -167,24 +320,18 @@ Example configuration:
 }
 ```
 
-Port names, directions, widths, and signedness are compared against the trusted
-reference. If a benchmark intentionally permits different candidate port names,
-provide an explicit `port_aliases` mapping in `designs.json`; aliases are never
-inferred automatically.
-
 ## Stage semantics
 
 ### P: Port Signature
 
 - extracts complete modules from the model response;
 - requires the configured top module;
-- compares candidate and reference port names, directions, widths, and
-  signedness;
+- compares candidate and reference port names, directions, widths, and signedness;
 - rejects missing, extra, duplicated, or incompatible ports.
 
 ### C: Compilation
 
-- invokes Icarus Verilog with the configured language generation;
+- invokes Icarus Verilog in the configured language mode;
 - wraps the candidate with `` `default_nettype none``;
 - enables warnings, including implicit-net diagnostics.
 
@@ -195,11 +342,11 @@ inferred automatically.
 
 ### M: Module Completeness
 
-- deterministic static rules detect placeholders, empty logic, undriven
+- deterministic source rules detect placeholders, empty logic, undriven
   outputs, malformed modules, empty procedural blocks, and optional missing
   `default` branches;
 - Yosys `proc; opt; check -assert` detects structural problems;
-- the full rules are implemented in `src/llm_rtl_eval/parsing.py` and
+- the full rules are in `src/llm_rtl_eval/parsing.py` and
   `src/llm_rtl_eval/stages.py`.
 
 ### F: Functional Equivalence
@@ -207,39 +354,27 @@ inferred automatically.
 - reference and candidate designs are normalized separately in Yosys;
 - both are flattened and copied into an equivalence miter;
 - `equiv_simple`, bounded induction, and `equiv_status -assert` are run;
-- a disproved, timed-out, or inconclusive proof is a failure.
+- disproved, timed-out, or inconclusive proofs fail.
 
-The configured induction depth is stored in the attempt result. Users evaluating
-stateful designs should validate that the chosen Yosys proof strategy matches
-the claims in their paper.
+## Bounded refinement and metrics
 
-## Bounded refinement
-
-Refinement is driven by the earliest failing stage. Each later prompt contains a
+Refinement is driven by the earliest failing stage. Later prompts contain a
 compact diagnostic and a stage-specific clarification. The framework does not
 edit RTL by hand, provide a direct code patch, or change target functionality.
-The original prompt file remains unchanged; every attempt receives its own
-snapshot.
 
-`K=3` is the default fixed interaction budget, not a claim of universal
-optimality. Increase it only when the experimental question explicitly concerns
-larger agentic repair budgets.
+`K=3` is the default total-attempt budget, not a universal optimum.
 
-## Metrics
-
-For each design, stage flags indicate whether that stage was passed by at least
-one attempt within the budget. The framework reports:
+The framework reports:
 
 - stage-wise P/C/E/M/F pass rates;
 - conditional yields `C|P`, `E|C`, `M|E`, and `F|M`;
 - `E2E@1`: full success on attempt 1;
-- `E2E@K`: full success within K attempts;
+- `E2E@K`: full success within K total attempts;
 - `SEY@K`: at least one attempt passes C and E;
-- ETS: refinements before first success;
-- TTFP: cumulative wall-clock seconds to first success;
+- ETS and TTFP;
 - first-failure and root-cause shares among unsolved designs.
 
-The implementation checks that:
+The implementation enforces:
 
 ```text
 E2E@1 <= E2E@K <= SEY@K
@@ -249,66 +384,65 @@ E2E@1 <= E2E@K <= SEY@K
 
 Synthesis is not a sixth front-end correctness stage.
 
-Generic technology-independent Yosys synthesis:
+Generic Yosys synthesis:
 
 ```bash
 python scripts/synthesize.py \
-  results/smoke/half_adder/attempt_2/candidate.v \
+  results/fixture-smoke/half_adder/attempt_2/candidate.v \
   --top half_adder \
-  --output results/smoke/half_adder/generic_synthesis
+  --output results/fixture-smoke/half_adder/generic_synthesis
 ```
 
 `synthesis/genus_template.tcl` is a credential-free starting point for an
-authorized Cadence environment. It relies on environment variables and does not
-include foundry paths, licenses, remote credentials, or private hostnames.
+authorized Cadence environment. It contains no foundry paths, credentials, or
+private hosts.
 
 ## Aggregate manuscript data
 
 `paper_results/coverage_within_k.csv` and
 `paper_results/recompute_aggregate_metrics.py` reproduce the aggregate within-K
-stage rates, conditional yields, E2E@K, SEY@K, and first-failure shares shown in
-the manuscript coverage table.
+stage rates, conditional yields, E2E@K, SEY@K, and first-failure shares included
+in this framework-and-aggregate-results release.
 
-They cannot reproduce E2E@1, ETS, or TTFP because the supplied source archive did
-not contain raw attempt-level logs. This limitation is explicit to prevent
-accidental fabrication of those quantities.
+They cannot reproduce E2E@1, ETS, TTFP, raw FPGA/ASIC reports, or individual LLM
+outputs because those assets were absent from the source archive supplied for
+this release. This limitation is explicit in [ARTIFACT_STATUS.md](ARTIFACT_STATUS.md).
 
 ## Verification
 
-Run unit and mock-integration tests:
+Run the complete Python test suite:
 
 ```bash
 pytest -q
 ```
 
-Run the repository hygiene check:
+Run repository checks:
 
 ```bash
 python scripts/verify_repository.py
 ```
 
-With Icarus Verilog and Yosys installed, run the real-tool smoke test:
+With real tools, run the deterministic integration smoke test:
 
 ```bash
 python scripts/verify_repository.py --require-tools --smoke
 ```
 
-GitHub Actions repeats syntax, tests, security scanning, aggregate-paper metric
-recomputation, and real-tool smoke evaluation on a clean runner. Before making a
-release public, confirm the private workflow passes on every configured Python
-version, then generate `SHA256SUMS` and run the public-release verifier.
+Before a public release:
 
-## Verification scope
+```bash
+python scripts/generate_checksums.py
+python scripts/verify_repository.py --public-release --require-tools --smoke
+```
 
-The bundled aggregate manuscript CSV reproduces only within-budget stage rates,
-conditional yields, E2E@K, SEY@K, and first-failure shares. It cannot recover
-E2E@1, ETS, TTFP, raw FPGA/ASIC reports, or individual LLM outputs because those
-assets were absent from the archive supplied for this release audit. See
-[ARTIFACT_STATUS.md](ARTIFACT_STATUS.md) and
-[VERIFICATION_REPORT.md](VERIFICATION_REPORT.md).
+GitHub Actions installs real Icarus Verilog and Yosys and runs all of these
+checks on a clean runner.
 
-## Citation and license
+## Security, citation, and license
 
-See `CITATION.cff`. Framework code and bundled smoke RTL are MIT licensed.
-Third-party EDA tools, provider services, and any separately added benchmark RTL
-remain under their own licenses and terms.
+- Never commit provider keys, `.env`, private hosts, or foundry paths.
+- See [SECURITY.md](SECURITY.md) before publishing a repository derived from an
+  older private tree.
+- See `CITATION.cff` for citation metadata.
+- Framework code and bundled smoke RTL are MIT licensed. Third-party tools,
+  services, and separately added benchmark RTL retain their own terms.

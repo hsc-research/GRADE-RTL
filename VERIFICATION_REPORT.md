@@ -2,126 +2,111 @@
 
 ## Release candidate
 
-- Software: **LLM-for-RTL Evaluation Framework**
-- Version: **1.0.0**
-- Release scope: **framework and aggregate manuscript results**
-- Verification date: **2026-07-26**
+- Software: **GRADE-RTL: Generated RTL Assessment through Design-flow Evaluation**
+- Version: **1.1.1**
+- Verification date: **2026-08-23**
+- Release scope: **framework, smoke examples, tests, and aggregate manuscript results**
 
-This report applies to the clean release tree containing the staged P/C/E/M/F
-framework, three author-created smoke designs, unit tests, aggregate within-K
-coverage data, generic Yosys synthesis support, and a credential-free Cadence
-Genus template. It does not certify reproduction of every paper experiment; the
-missing raw assets are listed in `ARTIFACT_STATUS.md` and
-`paper_artifact_manifest.json`.
+This report applies to the clean source tree containing the staged P/C/E/M/F framework, explicit fixture/live/replay modes, three author-created smoke designs, provider adapters, tests, aggregate within-budget coverage data, generic Yosys synthesis support, and a credential-free Cadence Genus template. It does not certify reproduction of every paper experiment; missing raw assets are listed in `ARTIFACT_STATUS.md` and `paper_artifact_manifest.json`.
 
 ## Verification environment
 
-- Operating system: Linux 6.12.13 x86_64, glibc 2.41
+- Operating system: Linux 6.18.35 x86_64
 - Python: 3.13.5
 - requests: 2.32.5
 - pytest: 9.0.2
-- Icarus Verilog: not available in this audit runtime
-- Yosys: not available in this audit runtime
+- setuptools: 82.0.1
+- wheel: 0.46.3
+- Icarus Verilog: unavailable in this audit runtime
+- Yosys: unavailable in this audit runtime
 
-The GitHub Actions workflow installs Icarus Verilog and Yosys on a clean Ubuntu
-runner and is the required final real-tool gate before the repository is made
-public.
+The GitHub Actions workflow installs Icarus Verilog and Yosys on clean Ubuntu runners using Python 3.10 and 3.12. That workflow is the final real-tool gate.
 
-## Completed checks
+## Mode and provenance verification
 
-### Source and repository hygiene
+The release distinguishes three response sources:
 
-- Parsed every released Python file with the Python AST parser.
-- Removed build directories, wheel metadata, bytecode, test caches, and generated
-  result directories from the release tree.
-- Scanned released text files for common API-key, private-key, cloud-token, and
-  hardcoded-password patterns.
-- Scanned executable Python, YAML, and Tcl sources for `shell=True`, `os.system`,
-  `sshpass`, disabled TLS verification, and disabled SSH host verification.
-- Confirmed that provider endpoints reject embedded credentials, credential-like
-  query parameters, URL fragments, and non-HTTPS remote endpoints.
-- Confirmed that provider failures do not copy remote response bodies or API keys
-  into result logs.
+- **fixture**: synthetic deterministic test RTL; never paper eligible;
+- **live**: a new response from an actual local/API model;
+- **replay**: a previously recorded genuine response whose prompt/response hashes and run metadata are checked.
 
-### Automated test suite
+Response mode is independent of EDA tool mode. Tool stubs exist only inside Pytest and are automatically classified as `stub`. A paper result is accepted only when the response source is live or paper-gated replay, the tools are real, and the run was explicitly created with `--paper-run`.
 
-The complete local test suite was run three consecutive times with bytecode and
-pytest cache generation disabled:
+## GitHub Actions failure addressed
+
+The previous CI failure was caused by a Module Completeness parser that matched the substring `latch inferred` inside Yosys output `No latch inferred ...`. The design was incorrectly sent to attempt 2, where no attempt-specific fixture existed. Version 1.1.1 matches only a genuine positive `Latch inferred for signal ...` line. Regression tests cover both messages and assert the intended smoke attempt counts:
 
 ```text
-Run 1: 45 passed, 1 skipped
-Run 2: 45 passed, 1 skipped
-Run 3: 45 passed, 1 skipped
+priority_encoder   attempt 1 passes
+ripple_carry_adder attempt 1 passes
+half_adder         attempt 1 fails P, attempt 2 passes
 ```
 
-The single skipped test is the real Icarus-Verilog/Yosys integration test. It is
-skipped only when either executable is absent.
+Expected smoke metrics:
 
-The tests cover interface parsing, ANSI and non-ANSI Verilog, module extraction,
-primitive-gate completeness, provider payload and response handling, seed
-semantics, secure endpoint validation, output isolation, path traversal and
-symlink containment, overwrite protection, metric consistency, refinement, and
-synthesis-script generation.
+```text
+E2E@1 = 2/3
+E2E@3 = 1
+SEY@3 = 1
+```
 
-### Manuscript aggregate data
+## Automated test suite
 
-`paper_results/recompute_aggregate_metrics.py` was run independently and its
-output matched `paper_results/aggregate_metrics.json` exactly. The released CSV
-and script reproduce within-budget stage rates, conditional yields, E2E@K,
-SEY@K, and first-failure shares.
+The complete local suite was run three consecutive times with bytecode and Pytest cache generation disabled:
 
-The supplied archive did not contain attempt-level paper logs, so the release
-does not claim to reproduce paper E2E@1, ETS, TTFP, raw model outputs, or raw
-FPGA/ASIC reports.
+```text
+Run 1: 69 passed, 1 skipped
+Run 2: 69 passed, 1 skipped
+Run 3: 69 passed, 1 skipped
+```
 
-### Command-line and packaging checks
+The single skipped test requires real Icarus Verilog and Yosys. Tests cover:
 
-- CLI help rendered successfully.
-- All three configured designs were loaded and listed successfully.
-- Package metadata and entry points were exercised by the test suite.
-- Built `llm_rtl_eval-1.0.0-py3-none-any.whl` successfully with SHA-256
-  `79ad613d85fe3c4aebc2bcd1e39527870180bffcd55dc378301eeb1a995f4d76`.
-- Installed that wheel in a temporary environment, rendered CLI help, and
-  imported version `1.0.0` successfully.
-- Removed all generated build directories and package metadata from the public
-  source tree after the packaging check.
+- fixture, live-orchestration, and replay CLI selection;
+- fixture/paper-result separation and real/stub tool classification;
+- provider payloads, credentials, endpoint security, model identifiers, and seed reporting;
+- replay source-run and bundle validation, prompt/response hashes, and export safety;
+- ANSI and non-ANSI interface parsing, module extraction, hierarchy selection, and path containment;
+- compilation, elaboration, completeness, equivalence-script generation, and Yosys latch-message parsing;
+- bounded refinement, attempt ordering, E2E/SEY/ETS/TTFP calculations, and failure taxonomy;
+- output isolation, overwrite protection, run manifests, run verification, and synthesis-script generation.
 
-### Repository verifier
+## Static and repository checks
 
-The non-tool verifier completed successfully with two expected warnings: Icarus
-Verilog and Yosys were not installed in this audit runtime. The verifier checked
-required files, source syntax, design assets, secret patterns, unsafe execution
-patterns, release-tree cleanliness, citation metadata, the complete test suite,
-and aggregate manuscript metric consistency.
+The following completed successfully:
 
-### Release-archive validation
+- Python AST parsing for all released Python files;
+- JSON and TOML parsing;
+- GitHub Actions YAML parsing;
+- internal Markdown link checking;
+- secret and unsafe-code scans;
+- release-tree cache/build hygiene checks;
+- design, prompt, reference, and fixture asset checks;
+- release-version consistency across package, citation, and artifact metadata;
+- aggregate manuscript metric recomputation.
 
-The final ZIP was tested with the archive integrity checker, extracted into a
-fresh directory, and verified independently. All 58 in-tree checksum entries
-matched; the extracted test suite again reported 45 passed and 1 real-tool test
-skipped; the extracted public-release verifier passed with only the two expected
-missing-tool warnings; and the extracted CLI listed all three bundled designs.
+## Packaging verification
 
-## Required author-side checks before public visibility
+The wheel `llm_rtl_eval-1.1.1-py3-none-any.whl` was built successfully with SHA-256:
 
-The following checks require the intended author infrastructure and cannot be
-completed in this audit runtime:
+```text
+30615c8c85238e9ee732065f5cf5d9d5ae503116d1bb8181331424b64266bf81
+```
 
-1. Rotate any credential that appeared in earlier private repository revisions.
-2. Publish from a fresh Git repository or a demonstrably scrubbed history.
-3. Push the release privately and confirm every GitHub Actions matrix job passes,
-   including the real Icarus-Verilog/Yosys smoke run.
-4. Exercise at least one intended real LLM provider with a non-billable or
-   carefully controlled test and inspect the saved metadata.
-5. Exercise the authorized Cadence Genus environment with the provided template,
-   using institution-specific paths only through private environment variables.
-6. Confirm that any subsequently added benchmark RTL preserves its original
-   license and provenance.
+It was installed into a new temporary environment. The installed package reported version `1.1.1`, rendered the mode guide, loaded all three designs, and completed the environment-doctor command.
+
+The source archive was checked with the ZIP integrity tester, extracted into a new directory, and independently rerun. The extracted tree reported **69 passed, 1 real-tool test skipped**, and the strict public-release verifier passed with only the expected local warnings that Icarus Verilog and Yosys were unavailable.
+
+## Limitations and required author-side checks
+
+This runtime could not execute the real Icarus/Yosys integration test. Before public visibility, authors must:
+
+1. push the release privately and confirm all GitHub Actions jobs pass;
+2. inspect at least one live provider run and verify its metadata and hashes;
+3. verify any authorized proprietary synthesis flow on the intended infrastructure;
+4. rotate any credential that appeared in older history;
+5. publish from a fresh or correctly scrubbed Git history.
 
 ## Release decision
 
-The tree is suitable for publication as a **framework-and-aggregate-results
-release** after the author-side credential/history and real-tool CI gates above
-pass. It must not be described as a complete raw-data reproduction package for
-the ten-design, nine-model FPGA/ASIC study unless the missing assets are added
-with licenses, provenance, and a revised manifest.
+The source is suitable for publication as a **framework-and-aggregate-results release** after the private GitHub Actions real-tool gate passes. It must not be described as a complete raw-data reproduction package for the ten-design, nine-model FPGA/ASIC paper study unless the missing assets are added with licenses, provenance, and a revised manifest.

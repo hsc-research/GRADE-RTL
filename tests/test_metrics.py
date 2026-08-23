@@ -35,8 +35,8 @@ def make_attempt(
     return AttemptResult(
         design=design,
         attempt=attempt,
-        provider="mock",
-        model="mock",
+        provider="fixture",
+        model="fixture-model",
         elapsed_seconds=elapsed,
         stages=stages,
         first_failure=first_failure,

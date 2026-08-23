@@ -107,6 +107,34 @@ def build_refined_prompt(
     return "\n".join(blocks).rstrip() + "\n"
 
 
+def _detect_tool_mode(
+    tool_paths: dict[str, str | None],
+    tool_versions: dict[str, str | None],
+) -> str:
+    """Return ``real`` unless a temporary test stub is detected."""
+    markers = ("stub", "mock", "fake")
+    for name in ("iverilog", "yosys"):
+        path = (tool_paths.get(name) or "").lower()
+        version = (tool_versions.get(name) or "").lower()
+        if any(marker in path or marker in version for marker in markers):
+            return "stub"
+        if any(part in path for part in ("/tests/", "/fixtures/", "/tool-stubs/", "/fake-bin/")):
+            return "stub"
+    return "real"
+
+
+def _validate_paper_run(provider: Provider, tool_mode: str) -> None:
+    if provider.test_fixture or provider.execution_mode == "fixture":
+        raise ConfigurationError("Synthetic fixture runs cannot be marked as paper results")
+    if not provider.paper_eligible:
+        raise ConfigurationError(
+            "This response source is not paper-eligible. Use live mode, or replay a "
+            "previous live run created with --paper-run and real EDA tools."
+        )
+    if tool_mode != "real":
+        raise ConfigurationError("Paper runs require real Icarus Verilog and Yosys")
+
+
 def _attempt_metadata(
     response: GenerationResponse,
     *,
@@ -114,6 +142,7 @@ def _attempt_metadata(
     raw_path: Path,
     rtl_path: Path | None,
     tool_versions: dict[str, str | None],
+    tool_mode: str,
 ) -> dict[str, Any]:
     data = dict(response.metadata)
     data.update(
@@ -122,6 +151,12 @@ def _attempt_metadata(
             "raw_response_sha256": sha256_file(raw_path),
             "rtl_sha256": sha256_file(rtl_path) if rtl_path and rtl_path.is_file() else None,
             "tool_versions": tool_versions,
+            "tool_mode": tool_mode,
+            "paper_result_eligible": bool(
+                data.get("paper_eligible", False)
+                and not data.get("test_fixture", False)
+                and tool_mode == "real"
+            ),
         }
     )
     return data
@@ -144,6 +179,7 @@ def evaluate_attempt(
     attempt: int,
     prompt_text: str,
     tool_versions: dict[str, str | None],
+    tool_mode: str,
     timeout_compile: float = 120.0,
     timeout_equivalence: float = 300.0,
     induction_depth: int = 10,
@@ -220,6 +256,7 @@ def evaluate_attempt(
         raw_path=raw_path,
         rtl_path=candidate,
         tool_versions=tool_versions,
+        tool_mode=tool_mode,
     )
     atomic_write_json(metadata_path, metadata)
     result = AttemptResult(
@@ -246,18 +283,28 @@ def _run_manifest(
     k: int,
     design_names: list[str],
     tool_versions: dict[str, str | None],
+    tool_paths: dict[str, str | None],
+    tool_mode: str,
     command_line: list[str],
+    paper_run: bool,
 ) -> dict[str, Any]:
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "created_utc": datetime.now(timezone.utc).isoformat(),
         "provider": provider.name,
         "model": provider.model,
+        **provider.provenance_metadata(),
+        "tool_mode": tool_mode,
+        "paper_result_eligible": bool(
+            provider.paper_eligible and not provider.test_fixture and tool_mode == "real"
+        ),
+        "paper_result": paper_run,
         "refinement_budget": k,
         "designs": design_names,
         "python": sys.version,
         "platform": platform.platform(),
         "tool_versions": tool_versions,
+        "tool_paths": tool_paths,
         "command_line": command_line,
         "environment_recorded_without_secrets": True,
     }
@@ -336,6 +383,7 @@ def run_experiment(
     timeout_equivalence: float = 300.0,
     induction_depth: int = 10,
     command_line: list[str] | None = None,
+    paper_run: bool = False,
 ) -> Path:
     if k < 1 or k > 100:
         raise ConfigurationError("K must be between 1 and 100")
@@ -349,23 +397,31 @@ def run_experiment(
         raise ConfigurationError("Unknown designs: " + ", ".join(unknown))
     results_root = resolve_inside(root, "results")
     run_dir = resolve_inside(root, Path("results") / run_id)
-    # Validate prompts and tool availability before creating any run output or
-    # making a potentially billable provider request.
+    # Validate prompts, provider configuration, and tool availability before
+    # creating any run output or making a potentially billable provider request.
     for design_name in design_names:
         prompt_path = resolve_inside(root, designs[design_name].prompt, must_exist=True)
         if not prompt_path.is_file() or not prompt_path.read_text(encoding="utf-8").strip():
             raise ConfigurationError(f"Prompt is missing or empty: {prompt_path}")
+    provider.preflight()
     missing_tools = [name for name in ("iverilog", "yosys") if shutil.which(name) is None]
     if missing_tools:
         raise InfrastructureError(
             "Required EDA tools are unavailable: " + ", ".join(missing_tools)
         )
-    results_root.mkdir(parents=True, exist_ok=True)
-    ensure_clean_directory(run_dir, overwrite=overwrite)
+    tool_paths = {
+        "iverilog": shutil.which("iverilog"),
+        "yosys": shutil.which("yosys"),
+    }
     tool_versions = {
         "iverilog": executable_version("iverilog", ["-V"]),
         "yosys": executable_version("yosys", ["-V"]),
     }
+    tool_mode = _detect_tool_mode(tool_paths, tool_versions)
+    if paper_run:
+        _validate_paper_run(provider, tool_mode)
+    results_root.mkdir(parents=True, exist_ok=True)
+    ensure_clean_directory(run_dir, overwrite=overwrite)
     atomic_write_json(
         run_dir / "run_manifest.json",
         _run_manifest(
@@ -373,7 +429,10 @@ def run_experiment(
             k=k,
             design_names=design_names,
             tool_versions=tool_versions,
+            tool_paths=tool_paths,
+            tool_mode=tool_mode,
             command_line=command_line or sys.argv,
+            paper_run=paper_run,
         ),
     )
     attempts_by_design: dict[str, list[AttemptResult]] = {}
@@ -395,6 +454,7 @@ def run_experiment(
                 attempt=attempt_number,
                 prompt_text=prompt,
                 tool_versions=tool_versions,
+                tool_mode=tool_mode,
                 timeout_compile=timeout_compile,
                 timeout_equivalence=timeout_equivalence,
                 induction_depth=induction_depth,
