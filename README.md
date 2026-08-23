@@ -22,6 +22,32 @@ and is not treated as a sixth correctness stage.
 > within-budget manuscript data. It is not a complete raw archive for all
 > paper experiments. See [ARTIFACT_STATUS.md](ARTIFACT_STATUS.md).
 
+## Framework overview
+
+<p align="center">
+  <img src="evaluation_flow.png"
+       alt="GRADE-RTL framework: input preparation, RTL generation, five-stage front-end validation, bounded refinement, robustness metrics, and FPGA/ASIC implementation evidence"
+       width="100%">
+</p>
+
+GRADE-RTL keeps two decisions separate:
+
+1. **Response source:** `fixture`, `live`, or `replay`.
+2. **EDA-tool mode:** real Icarus Verilog/Yosys, or test-only tool stubs.
+
+Fixture responses are synthetic and can never become paper data. Live runs call
+a genuine model. Replay runs re-evaluate provenance-checked responses captured
+from a genuine live run. Paper-result verification requires live/replay responses
+and real EDA tools.
+
+### Which mode should I use?
+
+| Goal | Mode | Model/API call? | Paper-result eligible? |
+|---|---|---:|---:|
+| Check installation, CI, stages, refinement, and metrics | `fixture` | No | No |
+| Collect a new response from a local or API model | `live` | Yes | Yes, after strict verification |
+| Re-evaluate an archived genuine response | `replay` | No | Yes, when provenance passes |
+
 ## Three response modes
 
 GRADE-RTL makes the source of generated RTL explicit:
@@ -55,37 +81,201 @@ replay  -> rerun a previously recorded genuine response
 The legacy `--provider mock` spelling remains accepted only for backwards
 compatibility and is always treated as non-paper fixture data.
 
-## Installation
+## Installation and first-time setup
 
-Requirements:
+GRADE-RTL requires:
 
-- Python 3.10 or newer
-- Icarus Verilog (`iverilog`)
-- Yosys
+- Python 3.10 or newer;
+- Icarus Verilog (`iverilog`);
+- Yosys.
 
-Ubuntu/Debian example:
+`git clone` or `git pull` updates the source code but does **not** install the
+Python command-line tools. The package must be installed into a Python 3.10+
+environment before `llm-rtl-eval` becomes available.
+
+### 1. Clone the repository
+
+```bash
+git clone https://github.com/hsc-research/GRADE-RTL.git
+cd GRADE-RTL
+```
+
+### 2. Confirm the Python version
+
+```bash
+python3 --version
+```
+
+The version must be 3.10 or newer. Do not lower `requires-python` in
+`pyproject.toml` merely to install under Python 3.9; the source targets Python
+3.10 features.
+
+Check whether a suitable interpreter is already available:
+
+```bash
+for p in python3.12 python3.11 python3.10; do
+  if command -v "$p" >/dev/null 2>&1; then
+    echo "Found: $(command -v "$p")"
+    "$p" --version
+  fi
+done
+```
+
+On a module-based university or HPC server, inspect available Python modules:
+
+```bash
+module spider python 2>&1
+module avail python 2>&1
+```
+
+Load the exact Python 3.10+ module shown by the server, for example:
+
+```bash
+module load python/3.11   # example only; use the name listed on your server
+python3 --version
+```
+
+A Conda environment is also suitable:
+
+```bash
+conda create -p "$PWD/.grade-rtl-env" python=3.11 pip -y
+conda activate "$PWD/.grade-rtl-env"
+```
+
+### 3. Create and activate a virtual environment
+
+Use the selected Python 3.10+ executable explicitly. For example:
+
+```bash
+python3.11 -m venv .venv
+source .venv/bin/activate
+python --version
+```
+
+On Ubuntu/Debian, install the virtual-environment and EDA packages first when
+needed:
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y iverilog yosys python3-venv
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install -e '.[dev]'
+sudo apt-get install -y python3-venv iverilog yosys
 ```
 
-Verify the checkout before running an experiment:
+### 4. Install GRADE-RTL
+
+```bash
+python -m pip install --upgrade pip setuptools wheel
+python -m pip install -e '.[dev]'
+hash -r
+```
+
+Confirm that the console commands were created inside the active environment:
+
+```bash
+which llm-rtl-eval
+llm-rtl-eval --help
+llm-rtl-eval --describe-modes
+```
+
+`which llm-rtl-eval` should resolve to a path under `.venv/bin/` or the active
+Conda environment.
+
+### 5. Verify the repository and real EDA tools
 
 ```bash
 llm-rtl-doctor --require-tools
 ```
 
-A successful check reports real Icarus Verilog and Yosys, the configured
-benchmark count, and the fixture directory. Without installation, the same
-source-tree check can be run as:
+A successful check reports real Icarus Verilog and Yosys, the configured design
+count, and the fixture directory. You can also inspect the tools directly:
+
+```bash
+which iverilog
+iverilog -V
+which yosys
+yosys -V
+```
+
+Without installing the package, source-tree commands remain available:
 
 ```bash
 PYTHONPATH=src python -m llm_rtl_eval.doctor --require-tools
+PYTHONPATH=src python -m llm_rtl_eval.cli --describe-modes
+```
+
+### Every new terminal session
+
+Activate the same environment before using the commands:
+
+```bash
+cd /path/to/GRADE-RTL
+source .venv/bin/activate
+```
+
+If a Python module was required to create `.venv`, load that module first in
+each new shell when your server does not preserve the interpreter path.
+
+### Common installation problems
+
+#### `llm-rtl-eval: command not found`
+
+The package was not installed successfully, or the environment is not active.
+Run:
+
+```bash
+source .venv/bin/activate
+python -m pip install -e '.[dev]'
+hash -r
+which llm-rtl-eval
+```
+
+#### `requires a different Python: 3.9 ... not in '>=3.10'`
+
+The virtual environment was created with Python 3.9. Remove it and recreate it
+with a newer interpreter:
+
+```bash
+deactivate 2>/dev/null || true
+rm -rf .venv
+python3.11 -m venv .venv   # or python3.10 / python3.12
+source .venv/bin/activate
+python -m pip install --upgrade pip setuptools wheel
+python -m pip install -e '.[dev]'
+```
+
+#### `No module named venv`
+
+Install the OS package that provides `venv`, or use Conda:
+
+```bash
+sudo apt-get install -y python3-venv
+```
+
+#### Icarus Verilog or Yosys is missing
+
+Install or load the real tools before running validation:
+
+```bash
+sudo apt-get install -y iverilog yosys
+# or, on a module-based system:
+module avail iverilog yosys
+```
+
+#### The checkout does not recognize `--mode`
+
+Confirm that the expected release is checked out:
+
+```bash
+grep '^version' pyproject.toml
+grep -n -- '--mode' src/llm_rtl_eval/cli.py
+git status
+git pull --ff-only
+```
+
+Then reinstall the editable package so the command reflects the updated source:
+
+```bash
+python -m pip install -e '.[dev]'
+hash -r
 ```
 
 ## Quick start
