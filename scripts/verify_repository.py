@@ -237,6 +237,8 @@ def cleanup_caches() -> None:
     for path in sorted(ROOT.rglob("*"), key=lambda item: len(item.parts), reverse=True):
         if path.is_dir() and path.name in {"__pycache__", ".pytest_cache", ".ruff_cache"}:
             shutil.rmtree(path, ignore_errors=True)
+        elif path.is_dir() and path.suffix == ".egg-info":
+            shutil.rmtree(path, ignore_errors=True)
         elif path.is_file() and path.suffix == ".pyc":
             path.unlink(missing_ok=True)
 
