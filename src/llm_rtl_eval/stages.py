@@ -161,6 +161,26 @@ def run_elaboration_stage(
     return StageResult("E", "PASS", "Hierarchy and parameters resolved", log_path.name)
 
 
+def _yosys_completeness_issues(output: str, returncode: int) -> list[str]:
+    """Extract structural failures from a Yosys completeness log.
+
+    Yosys emits both ``No latch inferred ...`` and ``Latch inferred ...``
+    messages.  Match only the latter; substring matching would turn a
+    successful combinational process into a false MC failure.
+    """
+    detected: list[str] = []
+    if re.search(r"(?mi)^\s*Latch inferred for signal\b", output):
+        detected.append("Yosys inferred a latch")
+    lowered = output.lower()
+    if "multiple conflicting drivers" in lowered:
+        detected.append("multiple conflicting drivers")
+    if "has no driver" in lowered:
+        detected.append("undriven signal")
+    if returncode != 0 and not detected:
+        detected.append("Yosys structural check failed")
+    return detected
+
+
 def run_completeness_stage(
     candidate_path: Path,
     design: DesignConfig,
@@ -208,16 +228,7 @@ def run_completeness_stage(
         output = f"{type(exc).__name__}: {exc}\n"
         returncode = 1
     atomic_write_text(yosys_log, output)
-    detected: list[str] = []
-    lowered = output.lower()
-    if "latch inferred" in lowered:
-        detected.append("Yosys inferred a latch")
-    if "multiple conflicting drivers" in lowered:
-        detected.append("multiple conflicting drivers")
-    if "has no driver" in lowered:
-        detected.append("undriven signal")
-    if returncode != 0 and not detected:
-        detected.append("Yosys structural check failed")
+    detected = _yosys_completeness_issues(output, returncode)
     if detected:
         return StageResult(
             "M",
