@@ -39,10 +39,14 @@ llm-rtl-doctor --require-tools
 pytest -q -p no:cacheprovider
 python scripts/verify_repository.py --require-tools --smoke
 python scripts/generate_checksums.py
+python scripts/generate_checksums.py --check
 python scripts/verify_repository.py --public-release
 ```
 
-The last two commands must complete with zero errors. A public paper run must also pass:
+After intentional file changes, regenerate and commit `SHA256SUMS` with those
+changes. CI checks the committed receipt without rewriting it, so stale or
+missing entries cannot be silently repaired by the verification job. The last
+two commands must complete with zero errors. A public paper run must also pass:
 
 ```bash
 llm-rtl-verify-run --require-paper-result results/RUN_ID

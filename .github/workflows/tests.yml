@@ -34,6 +34,11 @@ jobs:
       - name: Install package and test dependencies
         run: python -m pip install -e '.[dev]'
 
+      - name: Verify committed checksums without rewriting
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python scripts/generate_checksums.py --check
+
       - name: Run test suite
         env:
           PYTHONDONTWRITEBYTECODE: "1"
@@ -47,6 +52,4 @@ jobs:
       - name: Verify public-release manifest and checksums
         env:
           PYTHONDONTWRITEBYTECODE: "1"
-        run: |
-          python scripts/generate_checksums.py
-          python scripts/verify_repository.py --public-release
+        run: python scripts/verify_repository.py --public-release
